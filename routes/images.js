@@ -5,13 +5,14 @@ import { upload } from '../middleware/upload.js'
 import { db } from '../db/db.js'
 import { images } from '../db/schema.js'
 // import { saveFile, getUrl } from '../storage/local.js'
-import { saveFile, getUrl } from '../storage/r2.js'
+import { saveFile, getFile, getUrl } from '../storage/r2.js'
 import crypto from 'crypto';
 import { fileTypeFromBuffer } from 'file-type';
 
-const router = express.Router()
+const router = express.Router({ mergeParams: true })
 
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+
 
 router.post('/', upload.array('images', 10), async (req, res) => {
 
@@ -61,6 +62,87 @@ router.post('/', upload.array('images', 10), async (req, res) => {
 
     const anySucceeded = results.some(r => r.success);
     res.status(anySucceeded ? 201 : 400).json(results);
+})
+
+
+router.post('/:id/transform', async (req, res) => {
+    const { transformations } = req.body
+
+    if(!transformations || Object.keys(transformations).length === 0){
+        return res.status(400).json({ error: 'No transformations provided' });
+    }
+
+    try{
+        const [original] = await db.select().from(images).where(eq(images.id, req.params.id))
+
+        if(!original){
+            return res.status(404).json({ error: 'Image not found' });
+        }
+
+        const buffer = await getFile(original.key)
+        let pipeline = sharp(buffer)
+
+        if(transformations.rotate){
+            pipeline = pipeline.rotate(transformations.rotate);
+        }
+
+        if(transformations.crop){
+            const { width, height, x, y } = transformations.crop;
+            pipeline = pipeline.extract({ left: x, top: y, width, height });
+        }
+
+        if(transformations.resize){
+            const { width, height } = transformations.resize;
+            pipeline = pipeline.resize(width, height);
+        }
+
+        if(transformations.filters?.grayscale){
+            pipeline = pipeline.grayscale();
+        }
+
+        if(transformations.filters?.sepia){
+            pipeline = pipeline.recomb([
+                [0.393, 0.769, 0.189],
+                [0.349, 0.686, 0.168],
+                [0.272, 0.534, 0.131],
+            ]);
+        }
+
+        if(transformations.format){
+            pipeline = pipeline.toFormat(transformations.format);
+        }
+
+        const outputBuffer = await pipeline.toBuffer()
+        const outputMetadata = await sharp(outputBuffer).metadata()
+        const type = await fileTypeFromBuffer(outputBuffer)
+
+        const mimetype = type?.mime || original.mimetype
+        const extension = type?.ext || outputMetadata.format
+
+        const id = crypto.randomUUID()
+        const filename = `${id}.${extension}`
+
+        await saveFile(outputBuffer, filename, mimetype)
+        const url = getUrl(filename)
+
+        const [record] = await db.insert(images).values({
+            id,
+            key: filename,
+            url,
+            mimetype,
+            size: outputBuffer.length,
+            width: outputMetadata.width,
+            height: outputMetadata.height,
+            status: 'uploaded',
+            originalImageId: original.id,
+        }).returning();
+
+        res.status(201).json(record);
+
+    }catch(error){
+        console.log(error)
+        res.status(500).json({ error: 'Transform failed' });
+    }
 })
 
 export default router

@@ -9,5 +9,6 @@ export const images = pgTable('images', {
   width: integer('width'),
   height: integer('height'),
   status: text('status').default('uploaded').notNull(),
+  originalImageId: uuid('original_image_id'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
