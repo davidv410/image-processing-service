@@ -13,6 +13,33 @@ const router = express.Router({ mergeParams: true })
 
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
+router.get('/', async (req, res) => {
+    const { page } = req.query || 1
+    const { limit } = req.query || 2
+    const offset = (Number(page) - 1) * Number(limit)
+
+    try{
+
+        const [result, [{count}]] = await Promise.all([
+          db.select()
+            .from(images)
+            .orderBy(desc(images.createdAt))
+            .limit(Number(limit))
+            .offset(Number(offset)),
+
+          db.select({ count: sql`count(*)::int` })
+            .from(images)
+
+        ])
+
+        res.json({ data: result, totalPages: count, page: page, limit: limit })
+        
+    }catch(error){
+        console.log(error)
+        res.status(500).json({ error: 'server error' });
+    }
+
+})
 
 router.post('/', upload.array('images', 10), async (req, res) => {
 
